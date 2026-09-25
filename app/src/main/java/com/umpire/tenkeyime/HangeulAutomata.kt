@@ -30,6 +30,10 @@ class HangeulAutomata {
 
     private var jong: Char? = null
 
+    // 앞 음절의 받침 뒤에서 아직 확정되지 않은 다음 자음.
+    // 예: 만 + ㅅ = 만ㅅ, 같은 키 재입력 = 많.
+    private var pendingSecond: Char? = null
+
     /*
      * 현재 입력창 끝부분에서
      * 아직 다른 글자로 변경될 수 있는 문자열 길이
@@ -347,297 +351,119 @@ class HangeulAutomata {
     // 자음
     // ============================================================
 
-    private fun processConsonant(
-        input: Char,
-        allowCycle: Boolean
-    ): AutomataResult {
+    private fun processConsonant(input: Char, allowCycle: Boolean): AutomataResult {
+        // 앞 음절 + 미확정 다음 자음 (예: 만ㅅ).
+        pendingSecond?.let { pending ->
+            if (allowCycle && sameGroup(pending, input)) {
+                val next = cycle[pending] ?: input
+                val combined = batchimCombine["${jong}${next}"]
+                pendingSecond = null
+                if (combined != null) {
+                    jong = combined
+                    return replaceCurrent(composeCurrent())
+                }
+                pendingSecond = next
+                return replaceCurrent(composeCurrent() + next)
+            }
 
-
-        // --------------------------------------------------------
-        // 모음이 아직 없음
-        //
-        // = 초성 단계
-        // --------------------------------------------------------
+            // 다른 자음이 오면 가능한 겹받침을 완성한 후 새 초성 시작.
+            val combined = batchimCombine["${jong}${pending}"]
+            val fixed = if (combined != null) {
+                jong = combined
+                composeCurrent()
+            } else {
+                composeCurrent() + pending
+            }
+            pendingSecond = null
+            cho = input
+            vowelSequence = ""
+            jong = null
+            return replaceWithFixedPrefix(fixed, input.toString())
+        }
 
         if (vowelSequence.isEmpty()) {
-
-            val currentCho =
-                cho
-
-
-            // 같은 자음키 빠른 반복
-            if (
-                allowCycle &&
-                currentCho != null &&
-                sameGroup(
-                    currentCho,
-                    input
-                )
-            ) {
-
-                cho =
-                    cycle[currentCho]
-                        ?: input
-
-
-                return replaceCurrent(
-                    composeCurrent()
-                )
+            val currentCho = cho
+            if (allowCycle && currentCho != null && sameGroup(currentCho, input)) {
+                cho = cycle[currentCho] ?: input
+                return replaceCurrent(composeCurrent())
             }
-
-
-            // 다른 자음 또는 타임아웃
             cho = input
-
             vowelSequence = ""
-
             jong = null
-
-
-            return appendNewMutable(
-                input.toString()
-            )
+            return appendNewMutable(input.toString())
         }
-
-
-        // --------------------------------------------------------
-        // 초성 + 모음
-        // 받침 없음
-        // --------------------------------------------------------
 
         if (jong == null) {
-
             if (isValidFinal(input)) {
-
-                jong =
-                    input
-
-
-                return replaceCurrent(
-                    composeCurrent()
-                )
+                jong = input
+                return replaceCurrent(composeCurrent())
             }
-
-
-            // 종성이 될 수 없는 자음
-            // → 새로운 초성
             cho = input
-
             vowelSequence = ""
-
             jong = null
-
-
-            return appendNewMutable(
-                input.toString()
-            )
+            return appendNewMutable(input.toString())
         }
 
+        val currentJong = jong ?: return AutomataResult()
+        val split = splitBatchim[currentJong]
 
-        // --------------------------------------------------------
-        // 이미 받침 있음
-        // --------------------------------------------------------
-
-        val currentJong =
-            jong
-                ?: return AutomataResult()
-
-
-        val split =
-            splitBatchim[
-                currentJong
-            ]
-
-
-        // --------------------------------------------------------
-        // 갈 + ㄱ + ㄱ
-        //
-        // 갈
-        // → 갉
-        // → 갈ㅋ
-        // → 갈ㄲ
-        //
-        // "갈까" 처리
-        // --------------------------------------------------------
-
-        if (
-            allowCycle &&
-            split != null &&
-            sameGroup(
-                split.second,
-                input
-            )
-        ) {
-
-            val fixedFinal =
-                split.first
-
-            val movingConsonant =
-                split.second
-
-            val nextCho =
-                cycle[movingConsonant]
-                    ?: input
-
-
-            val fixedSyllable =
-                compose(
-                    cho,
-                    vowelSequence,
-                    fixedFinal
-                )
-
-
-            cho =
-                nextCho
-
-            vowelSequence =
-                ""
-
-            jong =
-                null
-
-
-            return replaceWithFixedPrefix(
-                fixedText = fixedSyllable,
-                mutableText = nextCho.toString()
-            )
-        }
-
-
-        // --------------------------------------------------------
-        // 일반 종성 자음 다중탭
-        // --------------------------------------------------------
-
-        if (
-            allowCycle &&
-            split == null &&
-            sameGroup(
-                currentJong,
-                input
-            )
-        ) {
-
-            val next =
-                cycle[currentJong]
-                    ?: input
-
-
-            if (isValidFinal(next)) {
-
-                jong =
-                    next
-
-
-                return replaceCurrent(
-                    composeCurrent()
-                )
-            }
-
-
-            // 다음 자음이 받침 불가능
-            // → 다음 초성
-            val fixedSyllable =
-                compose(
-                    cho,
-                    vowelSequence,
-                    null
-                )
-
-
-            cho =
-                next
-
-            vowelSequence =
-                ""
-
-            jong =
-                null
-
-
-            return replaceWithFixedPrefix(
-                fixedText = fixedSyllable,
-                mutableText = next.toString()
-            )
-        }
-
-
-        // --------------------------------------------------------
-        // 겹받침 생성
-        // --------------------------------------------------------
-
-        if (split == null) {
-
-            val combined =
-                batchimCombine[
-                    "$currentJong$input"
-                ]
-
-
+        // 겹받침 상태에서도 두 번째 자음의 멀티탭을 계속 허용한다.
+        if (allowCycle && split != null && sameGroup(split.second, input)) {
+            jong = split.first
+            val next = cycle[split.second] ?: input
+            val combined = batchimCombine["${jong}${next}"]
             if (combined != null) {
-
-                jong =
-                    combined
-
-
-                return replaceCurrent(
-                    composeCurrent()
-                )
+                jong = combined
+                return replaceCurrent(composeCurrent())
             }
-
-
-            /*
-             * 스마트 겹받침 스킵
-             *
-             * 현재 물리키의 첫 후보로는 겹받침을 만들 수 없지만
-             * 같은 키의 다음 후보로는 만들 수 있다면 그 후보를 즉시 사용한다.
-             *
-             * 예:
-             * ㄴ + [ㅅ → ㅎ → ㅆ] : ㄴㅅ 없음 → ㄴㅎ = ㄶ
-             * ㄹ + [ㅇ → ㅁ]      : ㄹㅇ 없음 → ㄹㅁ = ㄻ
-             * ㄹ + [ㄷ → ㅌ → ㄸ] : ㄹㄷ 없음 → ㄹㅌ = ㄾ
-             *
-             * 반대로 ㄱ+ㅅ, ㄴ+ㅈ, ㄹ+ㅅ, ㅂ+ㅅ처럼
-             * 첫 후보 자체가 유효하면 위의 direct combine에서 이미 처리된다.
-             */
-            val smartFinal =
-                findNextCombinableFinal(
-                    currentFinal = currentJong,
-                    keyBase = input
-                )
-
-            if (smartFinal != null) {
-
-                jong =
-                    smartFinal
-
-                return replaceCurrent(
-                    composeCurrent()
-                )
-            }
+            pendingSecond = next
+            return replaceCurrent(composeCurrent() + next)
         }
 
+        // 기존 단일 받침의 멀티탭은 그대로 유지한다.
+        if (allowCycle && split == null && sameGroup(currentJong, input)) {
+            val next = cycle[currentJong] ?: input
+            if (isValidFinal(next)) {
+                jong = next
+                return replaceCurrent(composeCurrent())
+            }
+            val fixed = compose(cho, vowelSequence, null)
+            cho = next
+            vowelSequence = ""
+            jong = null
+            return replaceWithFixedPrefix(fixed, next.toString())
+        }
 
-        // --------------------------------------------------------
-        // 현재 음절 종료
-        // 새로운 초성 시작
-        // --------------------------------------------------------
-
-        cho =
-            input
-
-        vowelSequence =
-            ""
-
-        jong =
-            null
-
-
-        return appendNewMutable(
-            input.toString()
-        )
+        // 첫 키에서는 겹받침을 자동 건너뛰지 않는다.
+        // 앞 음절을 아직 수정할 수 있게 유지하여 다음 키/타임아웃에서 결정한다.
+        pendingSecond = input
+        return replaceCurrent(composeCurrent() + input)
     }
 
+    // 서비스의 800ms 타이머가 만료될 때 호출.
+    // 결합 가능한 임시 자음은 겹받침으로 완성하고, 나머지는 다음 초성으로 둔다.
+    fun onConsonantTimeout(): AutomataResult? {
+        val pending = pendingSecond
+        if (pending != null) {
+            val combined = batchimCombine["${jong}${pending}"]
+            pendingSecond = null
+            if (combined != null) {
+                jong = combined
+                val result = replaceCurrent(composeCurrent())
+                reset() // 완성된 겹받침을 확정: 다음 모음이 받침을 옮기지 않음.
+                return result
+            }
+            // 만ㅅ 같은 비결합 상태는 '만'을 확정하고 'ㅅ'은 다음 초성으로 유지.
+            cho = pending
+            vowelSequence = ""
+            jong = null
+            mutableLength = 1
+            return null
+        }
+        // 초성 단독은 이후 모음을 받을 수 있어야 한다.
+        if (vowelSequence.isNotEmpty() && jong != null) reset()
+        return null
+    }
 
     // ============================================================
     // 모음
@@ -646,6 +472,16 @@ class HangeulAutomata {
     private fun processVowel(
         input: Char
     ): AutomataResult {
+
+        // 임시 다음 자음에 모음이 오면 다음 음절의 초성으로 사용한다.
+        pendingSecond?.let { pending ->
+            val fixed = composeCurrent()
+            pendingSecond = null
+            cho = pending
+            vowelSequence = input.toString()
+            jong = null
+            return replaceWithFixedPrefix(fixed, composeCurrent())
+        }
 
 
         // --------------------------------------------------------
@@ -843,6 +679,11 @@ class HangeulAutomata {
 
         if (mutableLength <= 0) {
             return null
+        }
+
+        pendingSecond?.let {
+            pendingSecond = null
+            return replaceCurrent(composeCurrent())
         }
 
         val currentJong =
@@ -1227,6 +1068,8 @@ class HangeulAutomata {
 
         jong =
             null
+
+        pendingSecond = null
 
         mutableLength =
             0

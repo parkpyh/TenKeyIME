@@ -50,6 +50,17 @@ class TenKeyImeService : InputMethodService() {
 
     private var lastKeyTime = 0L
 
+    // 자음 입력 후 800ms가 지나면 겹받침/음절 경계를 확정한다.
+    private val koreanCommitRunnable = Runnable {
+        automata.onConsonantTimeout()?.let { applyAutomataResult(it) }
+        clearMultiTap()
+    }
+
+    private fun cancelKoreanCommit() {
+        handler.removeCallbacks(koreanCommitRunnable)
+    }
+
+
 
     // =============================================================
     // 영문
@@ -660,6 +671,7 @@ class TenKeyImeService : InputMethodService() {
             currentInputConnection
                 ?: return
 
+        cancelKoreanCommit()
         clearMultiTap()
         clearEnglishMultiTap()
         stopSymbolCycle()
@@ -1284,6 +1296,8 @@ class TenKeyImeService : InputMethodService() {
         keyCode: Int,
         eventTime: Long
     ) {
+        cancelKoreanCommit()
+
 
         val sameKey =
             keyCode ==
@@ -1309,6 +1323,7 @@ class TenKeyImeService : InputMethodService() {
 
         lastKeyCode = keyCode
         lastKeyTime = eventTime
+        handler.postDelayed(koreanCommitRunnable, multiTapTimeoutMs)
     }
 
 
@@ -1317,6 +1332,7 @@ class TenKeyImeService : InputMethodService() {
         isVowel: Boolean,
         allowCycle: Boolean
     ) {
+        if (isVowel) cancelKoreanCommit()
 
         val connection =
             currentInputConnection
@@ -1445,6 +1461,7 @@ class TenKeyImeService : InputMethodService() {
 
 
     private fun clearAllInputState() {
+        cancelKoreanCommit()
 
         automata.reset()
 
@@ -1561,6 +1578,7 @@ class TenKeyImeService : InputMethodService() {
 
     override fun onDestroy() {
 
+        cancelKoreanCommit()
         cancelAllLongPress()
 
         super.onDestroy()
