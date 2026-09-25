@@ -1,22 +1,27 @@
-name: Build TenKeyIME APK
+name: Build and Release Dual TenKey
 
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Java 25
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -25,20 +30,49 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Restore Android signing key
+      - name: Restore existing signing key
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is missing"
+            exit 1
+          fi
           mkdir -p ~/.android
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > ~/.android/debug.keystore
           chmod 600 ~/.android/debug.keystore
+          test -s ~/.android/debug.keystore
 
-      - name: Build debug APK
+      - name: Build APK
         run: ./gradlew assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Prepare release APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          grep -Eq "versionName = \"$VERSION\"" app/build.gradle.kts
+
+          mkdir -p release
+          cp app/build/outputs/apk/debug/app-debug.apk \
+            "release/DualTenKey-${TAG}.apk"
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TenKeyIME-debug
+          name: DualTenKey-APK
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release/*.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Dual TenKey $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag
